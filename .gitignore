@@ -1,0 +1,31 @@
+# CMake files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+
+# Target binaries
+*.o
+lib*.a
+client/badvpn-client
+examples/bavl_test
+examples/bencryption_bench
+examples/bprocess_example
+examples/btimer_example
+examples/cavl_test
+examples/fairqueue_test
+examples/fairqueue_test2
+examples/indexedlist_test
+examples/ipaddr6_test
+examples/parse_number_test
+examples/predicate_test
+examples/savl_test
+examples/stdin_input
+examples/substring_test
+flooder/badvpn-flooder
+server/badvpn-server
+tests/bproto_test
+tests/chunkbuffer2_test
+tests/threadwork_test
+tun2socks/badvpn-tun2socks
+udpgw/badvpn-udpgw
