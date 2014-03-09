@@ -51,8 +51,17 @@
         #include <linux/if_tun.h>
     #endif
     #ifdef BADVPN_FREEBSD
-        #include <net/if_tun.h>
-        #include <net/if_tap.h>
+        #ifdef __APPLE__
+            #include <ctype.h>
+            #include <net/if_utun.h>
+            #include <sys/sys_domain.h>
+            #include <sys/kern_control.h>
+            #include <netinet/ip.h>
+            #include <sys/uio.h>
+        #else
+            #include <net/if_tun.h>
+            #include <net/if_tap.h>
+        #endif
     #endif
 #endif
 
@@ -91,6 +100,54 @@ static void recv_olap_handler (BTap *o, int event, DWORD bytes)
 
 #else
 
+#ifdef __APPLE__
+
+static inline int header_modify_read_write_return (int len)
+{
+    if (len > 0) {
+        return len > sizeof (u_int32_t) ? len - sizeof (u_int32_t) : 0;
+    } else {
+        return len;
+    }
+}
+
+static int write_tun_header (int fd, void *buf, size_t len)
+{
+    u_int32_t type;
+    struct iovec iv[2];
+    struct ip *iph;
+
+    iph = (struct ip *) buf;
+
+    if (iph->ip_v == 6) {
+        type = htonl(AF_INET6);
+    } else {
+        type = htonl(AF_INET);
+    }
+
+    iv[0].iov_base = &type;
+    iv[0].iov_len = sizeof(type);
+    iv[1].iov_base = buf;
+    iv[1].iov_len = len;
+
+    return header_modify_read_write_return(writev(fd, iv, 2));
+}
+
+static int read_tun_header (int fd, void *buf, size_t len)
+{
+    u_int32_t type;
+    struct iovec iv[2];
+
+    iv[0].iov_base = &type;
+    iv[0].iov_len = sizeof(type);
+    iv[1].iov_base = buf;
+    iv[1].iov_len = len;
+
+    return header_modify_read_write_return(readv(fd, iv, 2));
+}
+
+#endif
+
 static void fd_handler (BTap *o, int events)
 {
     DebugObject_Access(&o->d_obj);
@@ -104,7 +161,11 @@ static void fd_handler (BTap *o, int events)
         ASSERT(o->output_packet)
         
         // try reading into the buffer
+#ifdef __APPLE__
+        int bytes = read_tun_header(o->fd, o->output_packet, o->frame_mtu);
+#else
         int bytes = read(o->fd, o->output_packet, o->frame_mtu);
+#endif
         if (bytes <= 0) {
             // Treat zero return value the same as EAGAIN.
             // See: https://bugzilla.kernel.org/show_bug.cgi?id=96381
@@ -162,7 +223,11 @@ void output_handler_recv (BTap *o, uint8_t *data)
 #else
     
     // attempt read
+#ifdef __APPLE__
+    int bytes = read_tun_header(o->fd, data, o->frame_mtu);
+#else
     int bytes = read(o->fd, data, o->frame_mtu);
+#endif
     if (bytes <= 0) {
         if (bytes == 0 || errno == EAGAIN || errno == EWOULDBLOCK) {
             // See note about zero return in fd_handler.
@@ -369,6 +434,68 @@ fail0:
             #endif
             
             #ifdef BADVPN_FREEBSD
+
+            #ifdef __APPLE__
+
+            if (init_data.dev_type != BTAP_DEV_TUN) {
+                BLog(BLOG_ERROR, "TAP not supported on Darwin");
+                goto fail0;
+            }
+
+            if (!init_data.init.string) {
+                BLog(BLOG_ERROR, "no device specified");
+                goto fail0;
+            }
+
+            int utunnum = -1;
+            char *devstr_s = init_data.init.string;
+            char *devstr_t = NULL;
+            while (*devstr_s && !isdigit((int) *devstr_s)) {
+                devstr_s++;
+            }
+            utunnum = (int) strtol(devstr_s, &devstr_t, 10);
+            if (devstr_s == devstr_t) {
+                utunnum = -1;
+            }
+            if (utunnum == -1) {
+                BLog(BLOG_ERROR, "error device name");
+                goto fail0;
+            }
+
+            struct ctl_info ctlInfo;
+            struct ifreq ifr;
+            memset(&ctlInfo, 0, sizeof(ctlInfo));
+            if (strlcpy(ctlInfo.ctl_name, UTUN_CONTROL_NAME, sizeof(ctlInfo.ctl_name)) >=
+                sizeof(ctlInfo.ctl_name)) {
+                BLog(BLOG_ERROR, "UTUN_CONTROL_NAME too long");
+                goto fail0;
+            }
+
+            o->fd = socket(PF_SYSTEM, SOCK_DGRAM, SYSPROTO_CONTROL);
+            if (o->fd < 0) {
+                BLog(BLOG_ERROR, "error for socket(SYSPROTO_CONTROL)");
+                goto fail0;
+            }
+
+            if (ioctl(o->fd, CTLIOCGINFO, &ctlInfo) == -1) {
+                BLog(BLOG_ERROR, "ioctl(CTLIOCGINFO)");
+                goto fail1;
+            }
+
+            struct sockaddr_ctl sc;
+            sc.sc_id = ctlInfo.ctl_id;
+            sc.sc_len = sizeof(sc);
+            sc.sc_family = AF_SYSTEM;
+            sc.ss_sysaddr = AF_SYS_CONTROL;
+            sc.sc_unit = utunnum + 1;
+            if (connect(o->fd, (struct sockaddr *)&sc, sizeof(sc)) == -1) {
+                BLog(BLOG_ERROR, "error for connect(AF_SYS_CONTROL)");
+                goto fail1;
+            }
+
+            snprintf(devname_real, sizeof(devname_real), "utun%d", utunnum);
+
+            #else
             
             if (init_data.dev_type == BTAP_DEV_TUN) {
                 BLog(BLOG_ERROR, "TUN not supported on FreeBSD");
@@ -400,6 +527,8 @@ fail0:
             }
             
             strcpy(devname_real, ifr.ifr_name);
+
+            #endif
             
             #endif
             
@@ -559,7 +688,11 @@ void BTap_Send (BTap *o, uint8_t *data, int data_len)
     
 #else
     
+#ifdef __APPLE__
+    int bytes = write_tun_header(o->fd, data, data_len);
+#else
     int bytes = write(o->fd, data, data_len);
+#endif
     if (bytes < 0) {
         // malformed packets will cause errors, ignore them and act like
         // the packet was accepeted
