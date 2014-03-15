@@ -491,10 +491,15 @@ void print_help (const char *name)
         "        [--password <password>]\n"
         "        [--password-file <file>]\n"
         "        [--append-source-to-username]\n"
+#ifdef BADVPN_SOCKS_UDP_RELAY
+        "        [--enable-udprelay]\n"
+        "        [--udprelay-max-connections <number>]\n"
+#else
         "        [--udpgw-remote-server-addr <addr>]\n"
         "        [--udpgw-max-connections <number>]\n"
         "        [--udpgw-connection-buffer-size <number>]\n"
         "        [--udpgw-transparent-dns]\n"
+#endif
         "Address format is a.b.c.d:port (IPv4) or [addr]:port (IPv6).\n",
         name
     );
@@ -679,6 +684,10 @@ int parse_arguments (int argc, char *argv[])
         else if (!strcmp(arg, "--append-source-to-username")) {
             options.append_source_to_username = 1;
         }
+#ifdef BADVPN_SOCKS_UDP_RELAY
+        else if (!strcmp(arg, "--enable-udprelay")) {
+            options.udpgw_remote_server_addr = "0.0.0.0:0";
+#else
         else if (!strcmp(arg, "--udpgw-remote-server-addr")) {
             if (1 >= argc - i) {
                 fprintf(stderr, "%s: requires an argument\n", arg);
@@ -686,8 +695,13 @@ int parse_arguments (int argc, char *argv[])
             }
             options.udpgw_remote_server_addr = argv[i + 1];
             i++;
+#endif
         }
+#ifdef BADVPN_SOCKS_UDP_RELAY
+        else if (!strcmp(arg, "--udprelay-max-connections")) {
+#else
         else if (!strcmp(arg, "--udpgw-max-connections")) {
+#endif
             if (1 >= argc - i) {
                 fprintf(stderr, "%s: requires an argument\n", arg);
                 return 0;
@@ -698,6 +712,7 @@ int parse_arguments (int argc, char *argv[])
             }
             i++;
         }
+#ifndef BADVPN_SOCKS_UDP_RELAY
         else if (!strcmp(arg, "--udpgw-connection-buffer-size")) {
             if (1 >= argc - i) {
                 fprintf(stderr, "%s: requires an argument\n", arg);
@@ -712,6 +727,7 @@ int parse_arguments (int argc, char *argv[])
         else if (!strcmp(arg, "--udpgw-transparent-dns")) {
             options.udpgw_transparent_dns = 1;
         }
+#endif
         else {
             fprintf(stderr, "unknown option: %s\n", arg);
             return 0;
@@ -818,7 +834,11 @@ int process_arguments (void)
     // resolve remote udpgw server address
     if (options.udpgw_remote_server_addr) {
         if (!BAddr_Parse2(&udpgw_remote_server_addr, options.udpgw_remote_server_addr, NULL, 0, 0)) {
+#ifdef BADVPN_SOCKS_UDP_RELAY
+            BLog(BLOG_ERROR, "udprelay server addr: BAddr_Parse2 failed");
+#else
             BLog(BLOG_ERROR, "remote udpgw server addr: BAddr_Parse2 failed");
+#endif
             return 0;
         }
     }
@@ -1113,7 +1133,11 @@ int process_device_udp_packet (uint8_t *data, int data_len)
     
     // check payload length
     if (data_len > udp_mtu) {
+#ifdef BADVPN_SOCKS_UDP_RELAY
+        BLog(BLOG_ERROR, "packet is too large, cannot send to udprelay");
+#else
         BLog(BLOG_ERROR, "packet is too large, cannot send to udpgw");
+#endif
         goto fail;
     }
     
@@ -1784,7 +1808,11 @@ void udpgw_client_handler_received (void *unused, BAddr local_addr, BAddr remote
     
     switch (local_addr.type) {
         case BADDR_TYPE_IPV4: {
+#ifdef BADVPN_SOCKS_UDP_RELAY
+            BLog(BLOG_INFO, "UDP: from udprelay %d bytes", data_len);
+#else
             BLog(BLOG_INFO, "UDP: from udpgw %d bytes", data_len);
+#endif
             
             if (data_len > UINT16_MAX - (sizeof(struct ipv4_header) + sizeof(struct udp_header)) ||
                 data_len > BTap_GetMTU(&device) - (int)(sizeof(struct ipv4_header) + sizeof(struct udp_header))
@@ -1823,10 +1851,18 @@ void udpgw_client_handler_received (void *unused, BAddr local_addr, BAddr remote
         } break;
         
         case BADDR_TYPE_IPV6: {
+#ifdef BADVPN_SOCKS_UDP_RELAY
+            BLog(BLOG_INFO, "UDP/IPv6: from udprelay %d bytes", data_len);
+#else
             BLog(BLOG_INFO, "UDP/IPv6: from udpgw %d bytes", data_len);
+#endif
             
             if (!options.netif_ip6addr) {
+#ifdef BADVPN_SOCKS_UDP_RELAY
+                BLog(BLOG_ERROR, "got IPv6 packet from udprelay but IPv6 is disabled");
+#else
                 BLog(BLOG_ERROR, "got IPv6 packet from udpgw but IPv6 is disabled");
+#endif
                 return;
             }
             
