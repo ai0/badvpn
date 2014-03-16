@@ -238,7 +238,25 @@ static int client_socks_recv_send_out (struct tcp_client *client);
 static err_t client_sent_func (void *arg, struct tcp_pcb *tpcb, u16_t len);
 static void udpgw_client_handler_received (void *unused, BAddr local_addr, BAddr remote_addr, const uint8_t *data, int data_len);
 
+#ifdef TARGET_LIBTSOCKS
+void tun2socks_stop (void)
+{
+    // ignore when not running
+    if (quitting == 1) {
+        return;
+    }
+
+    // set quitting
+    quitting = 1;
+
+    // exit event loop
+    BReactor_Quit(&ss, 1);
+}
+
+int tun2socks_start (int argc, char **argv, void (^handler)(void))
+#else
 int main (int argc, char **argv)
+#endif
 {
     if (argc <= 0) {
         return 1;
@@ -321,11 +339,13 @@ int main (int argc, char **argv)
     // set not quitting
     quitting = 0;
     
+#ifndef TARGET_LIBTSOCKS
     // setup signal handler
     if (!BSignal_Init(&ss, signal_handler, NULL)) {
         BLog(BLOG_ERROR, "BSignal_Init failed");
         goto fail2;
     }
+#endif
     
     // init TUN device
     if (!BTap_Init(&device, &ss, options.tundev, device_error_handler, NULL, 1)) {
@@ -403,6 +423,13 @@ int main (int argc, char **argv)
     // init number of clients
     num_clients = 0;
     
+#ifdef TARGET_LIBTSOCKS
+    // callback handler
+    if (handler) {
+        handler();
+    }
+#endif
+
     // enter event loop
     BLog(BLOG_NOTICE, "entering event loop");
     BReactor_Exec(&ss);
@@ -440,7 +467,9 @@ fail4:
     PacketPassInterface_Free(&device_read_interface);
     BTap_Free(&device);
 fail3:
+#ifndef TARGET_LIBTSOCKS
     BSignal_Finish();
+#endif
 fail2:
     BReactor_Free(&ss);
 fail1:

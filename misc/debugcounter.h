@@ -75,7 +75,7 @@ static void DebugCounter_Init (DebugCounter *obj)
  */
 static void DebugCounter_Free (DebugCounter *obj)
 {
-#ifndef NDEBUG
+#if !defined(NDEBUG) && !defined(BADVPN_LIBTSOCKS)
     ASSERT(obj->c == 0 || obj->c == INT32_MAX)
 #endif
 }
